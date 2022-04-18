@@ -1,0 +1,105 @@
+--PAULO ANDRADE 18/04/2021 --
+
+DECLARE  @MES				TINYINT
+DECLARE  @ANO				SMALLINT
+DECLARE  @PRAZO_MG			DATE
+DECLARE  @PRAZO_SP			DATE
+
+
+SET @MES        = 03
+SET @ANO        = 2022
+
+    IF @MES = 12
+        BEGIN
+            SET @PRAZO_SP   = '10/01/' + CONVERT(VARCHAR, @ANO + 1)
+            SET @PRAZO_MG    = '04/01/' + CONVERT(VARCHAR,@ANO + 1)
+        END
+    ELSE    
+        BEGIN
+            SET @PRAZO_SP   = '10/' + CONVERT(VARCHAR,@MES + 1) + '/'+ CONVERT(VARCHAR, @ANO)
+            SET @PRAZO_MG    = '04/'+ CONVERT(VARCHAR,@MES + 1) + '/' + CONVERT(VARCHAR,@ANO)
+    END;
+
+
+WITH EMPRESAS_ATIVAS AS ( 
+    SELECT  A.EMPRESA,                                
+            C.NOME_FANTASIA,
+            C.NOME,
+            CONVERT(VARCHAR, B.DATA_INICIO_ERPM_PDV, 103) AS INICIO_PROCFIT
+    FROM VW_VENDAS_GLOBAL         AS A
+        INNER JOIN PARAMETROS_VENDAS  AS B ON A.EMPRESA            = B.EMPRESA_USUARIA
+        INNER JOIN EMPRESAS_USUARIAS  AS C ON B.EMPRESA_USUARIA = C.EMPRESA_USUARIA
+    WHERE A.MES = MONTH(GETDATE()) AND A.ANO = YEAR(GETDATE()) AND (B.DATA_INICIO_ERPM_PDV  < GETDATE() - 30)
+    GROUP BY 
+        A.EMPRESA,
+        C.NOME_FANTASIA,
+        C.NOME,
+        B.DATA_INICIO_ERPM_PDV
+),
+
+FECHAMENTO AS(
+SELECT A.EMPRESA									AS EMPRESA,
+       A.NOME_FANTASIA								AS APELIDO,
+       A.NOME										AS RAZAO_SOCIAL,
+       A.INICIO_PROCFIT								AS INICIO_PROCFIT,
+       C.MES										AS MES,
+       C.ANO										AS ANO,
+       D.NOME										AS USUARIO,
+       C.DATA_HORA									AS FECHAMENTO,
+	   C.FECHAMENTO_TRIBUTARIO_APURACAO_ICMS		AS APURACAO
+    
+    FROM EMPRESAS_ATIVAS                                              AS A
+        LEFT  JOIN FECHAMENTOS_TRIBUTARIOS_APURACOES_ICMS_EMPRESAS    AS B ON A.EMPRESA                                  = B.EMPRESA_USUARIA
+        INNER JOIN FECHAMENTOS_TRIBUTARIOS_APURACOES_ICMS             AS C ON B.FECHAMENTO_TRIBUTARIO_APURACAO_ICMS      = C.FECHAMENTO_TRIBUTARIO_APURACAO_ICMS
+        LEFT JOIN USUARIOS                                            AS D ON C.USUARIO_LOGADO                           = D.USUARIO
+	
+
+    WHERE C.CANCELAMENTO_FECHAMENTO_TRIBUTARIO_APURACAO IS NULL AND
+          C.MES = @MES AND
+          C.ANO = @ANO
+    GROUP BY 
+            A.EMPRESA,
+            A.NOME_FANTASIA,
+            A.NOME,
+            A.INICIO_PROCFIT,
+            C.MES,
+            C.ANO,
+            D.NOME,
+            C.DATA_HORA,
+			C.FECHAMENTO_TRIBUTARIO_APURACAO_ICMS	
+)
+SELECT A.EMPRESA                                       AS EMPRESA,
+       A.NOME_FANTASIA                                 AS APELIDO,
+       A.NOME                                          AS RAZAO_SOCIAL,
+       A.INICIO_PROCFIT                                AS INICIO_PROCFIT,
+       ISNULL(B.MES, @MES)                             AS MES,
+       ISNULL(B.ANO, @ANO)                             AS ANO,
+	   ISNULL(B.APURACAO,0)                           AS APURACAO,
+       
+       ISNULL(CONVERT(VARCHAR,B.FECHAMENTO,103),'')    AS [DATA_FECHAMENTO],
+       CASE A.NOME
+            WHEN 'FARMACIA EX MG LTDA' THEN
+                CONVERT(VARCHAR,@PRAZO_MG,103)                
+            ELSE
+                CONVERT(VARCHAR,@PRAZO_SP,103)
+       END AS [PRAZO_FINAL],
+
+       CASE A.NOME
+            WHEN 'FARMACIA EX MG LTDA' THEN
+                --IIF (CONVERT(DATE,B.FECHAMENTO) <= @PRAZO_MG OR @PRAZO_MG >= GETDATE(), 'OK', 'ATRASADO')    
+                
+                IIF (CONVERT(DATE,B.FECHAMENTO) IS NULL AND @PRAZO_MG >= GETDATE(), 'A REALIZAR',IIF( CONVERT(DATE,B.FECHAMENTO) IS NULL AND GETDATE() > @PRAZO_MG , 'ATRASADO', IIF (CONVERT(DATE,B.FECHAMENTO) <= @PRAZO_MG, 'OK','ATRASADO')))
+
+            ELSE
+                --IIF (CONVERT(DATE,B.FECHAMENTO) <= @PRAZO_SP OR @PRAZO_SP >= GETDATE(), 'OK', 'ATRASADO')
+
+                IIF (CONVERT(DATE,B.FECHAMENTO) IS NULL AND @PRAZO_SP >= GETDATE(), 'A REALIZAR',IIF( CONVERT(DATE,B.FECHAMENTO) IS NULL AND GETDATE() > @PRAZO_SP , 'ATRASADO', IIF (CONVERT(DATE,B.FECHAMENTO) <=  @PRAZO_SP, 'OK','ATRASADO')))
+       
+            END AS [FECHAMENTO],
+      IIF (B.FECHAMENTO IS NOT NULL, 'OK','ABERTO') AS SITUACAO_FINAL,
+      ISNULL(B.USUARIO,'')    AS USUARIO
+    FROM EMPRESAS_ATIVAS  AS A
+        LEFT JOIN FECHAMENTO  AS B ON A.EMPRESA = B.EMPRESA
+    WHERE CONVERT(DATE,A.INICIO_PROCFIT) < CONVERT(DATE,'01/' + CONVERT(VARCHAR,@MES) + '/' + CONVERT(VARCHAR,@ANO)) 
+
+                             
